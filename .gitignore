@@ -1,0 +1,17 @@
+# 依存パッケージ
+node_modules
+
+# ビルド成果物
+dist
+
+# 環境変数（Supabase キーなどの秘匿情報）
+.env
+.env.local
+.env.*.local
+
+# エディタ・OS の一時ファイル
+.DS_Store
+*.local
+
+# Vite のキャッシュ
+.vite
