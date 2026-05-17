@@ -1,28 +1,118 @@
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
-
-// ダミーの物件データ
-const DUMMY_PROPERTIES = [
-  { id: 1, name: '渋谷プレミアムタワー', rent: 280000, area: '東京都渋谷区', size: 62.5, rooms: '2LDK', tag: '人気' },
-  { id: 2, name: '新宿グランドマンション', rent: 95000, area: '東京都新宿区', size: 25.3, rooms: '1K', tag: '新着' },
-  { id: 3, name: '品川シービューレジデンス', rent: 450000, area: '東京都品川区', size: 95.2, rooms: '3LDK', tag: '高層' },
-  { id: 4, name: '恵比寿スタイルアパート', rent: 165000, area: '東京都渋谷区恵比寿', size: 42.0, rooms: '1LDK', tag: '' },
-  { id: 5, name: '池袋コンフォートマンション', rent: 130000, area: '東京都豊島区', size: 48.6, rooms: '2DK', tag: '駅近' },
-  { id: 6, name: '秋葉原モダンレジデンス', rent: 85000, area: '東京都千代田区', size: 22.8, rooms: '1K', tag: '新着' },
-  { id: 7, name: '目黒リバーサイドコート', rent: 210000, area: '東京都目黒区', size: 55.0, rooms: '2LDK', tag: '川沿い' },
-  { id: 8, name: '上野パークビューハイツ', rent: 120000, area: '東京都台東区', size: 38.4, rooms: '1LDK', tag: '' },
-  { id: 9, name: '六本木ラグジュアリースイート', rent: 580000, area: '東京都港区六本木', size: 110.0, rooms: '3LDK', tag: '高級' },
-]
+import PropertyForm from '../components/PropertyForm'
 
 // 家賃を「〇万円」形式にフォーマット
 function formatRent(rent) {
-  return `${(rent / 10000).toFixed(rent % 10000 === 0 ? 0 : 1)}万円`
+  if (rent >= 10000) {
+    const man = rent / 10000
+    return `${Number.isInteger(man) ? man : man.toFixed(1)}万円`
+  }
+  return `${rent.toLocaleString()}円`
 }
 
 export default function PropertiesPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
+
+  const [properties, setProperties] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  // showForm: モーダルの表示/非表示
+  const [showForm, setShowForm] = useState(false)
+  // editTarget: null = 新規登録モード、object = 編集モード
+  const [editTarget, setEditTarget] = useState(null)
+
+  // =============================================
+  // SELECT: ログインユーザーの物件一覧を取得
+  // RLS により自分の物件のみが返ってくる
+  // =============================================
+  const fetchProperties = useCallback(async () => {
+    setLoading(true)
+    setError('')
+
+    const { data, error } = await supabase
+      .from('properties')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      setError('物件の取得に失敗しました')
+    } else {
+      setProperties(data)
+    }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    fetchProperties()
+  }, [fetchProperties])
+
+  // =============================================
+  // INSERT / UPDATE: フォームの保存処理
+  // =============================================
+  async function handleSave(formData) {
+    if (editTarget) {
+      // 編集モード: 対象レコードを UPDATE
+      const { error } = await supabase
+        .from('properties')
+        .update(formData)
+        .eq('id', editTarget.id)
+
+      if (error) return { error: '物件の更新に失敗しました' }
+    } else {
+      // 新規モード: user_id を付与して INSERT
+      const { error } = await supabase
+        .from('properties')
+        .insert({ ...formData, user_id: user.id })
+
+      if (error) return { error: '物件の登録に失敗しました' }
+    }
+
+    // 成功したらモーダルを閉じて一覧を再取得
+    setShowForm(false)
+    setEditTarget(null)
+    await fetchProperties()
+    return {}
+  }
+
+  // =============================================
+  // DELETE: 物件を削除（RLS により自分の物件のみ削除可）
+  // =============================================
+  async function handleDelete(property) {
+    if (!window.confirm(`「${property.name}」を削除してもよいですか？`)) return
+
+    const { error } = await supabase
+      .from('properties')
+      .delete()
+      .eq('id', property.id)
+
+    if (error) {
+      alert('削除に失敗しました')
+      return
+    }
+    // 削除成功: ローカル状態から即時除去（再フェッチ不要）
+    setProperties((prev) => prev.filter((p) => p.id !== property.id))
+  }
+
+  // 編集ボタンを押したときにモーダルを開く
+  function handleEditClick(property) {
+    setEditTarget(property)
+    setShowForm(true)
+  }
+
+  // 新規登録ボタンを押したときにモーダルを開く
+  function handleAddClick() {
+    setEditTarget(null)
+    setShowForm(true)
+  }
+
+  function handleFormCancel() {
+    setShowForm(false)
+    setEditTarget(null)
+  }
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -37,9 +127,7 @@ export default function PropertiesPage() {
           <h1 className="header-logo">不動産管理</h1>
           <div className="header-right">
             <span className="header-email">{user?.email}</span>
-            <button onClick={handleLogout} className="btn-logout">
-              ログアウト
-            </button>
+            <button onClick={handleLogout} className="btn-logout">ログアウト</button>
           </div>
         </div>
       </header>
@@ -47,40 +135,96 @@ export default function PropertiesPage() {
       {/* メインコンテンツ */}
       <main className="main">
         <div className="page-title-area">
-          <h2 className="page-title">物件一覧</h2>
-          <span className="property-count">{DUMMY_PROPERTIES.length}件</span>
+          <div className="page-title-left">
+            <h2 className="page-title">物件一覧</h2>
+            {!loading && (
+              <span className="property-count">{properties.length}件</span>
+            )}
+          </div>
+          <button onClick={handleAddClick} className="btn-add">
+            ＋ 物件を登録
+          </button>
         </div>
+
+        {/* ローディング */}
+        {loading && (
+          <div className="loading-screen">
+            <div className="loading-spinner" />
+          </div>
+        )}
+
+        {/* エラー */}
+        {!loading && error && (
+          <div className="page-error">
+            <p>{error}</p>
+            <button onClick={fetchProperties} className="btn-secondary">再読み込み</button>
+          </div>
+        )}
+
+        {/* 物件なし */}
+        {!loading && !error && properties.length === 0 && (
+          <div className="empty-state">
+            <p className="empty-title">物件が登録されていません</p>
+            <p className="empty-desc">「物件を登録」ボタンから最初の物件を追加しましょう</p>
+            <button onClick={handleAddClick} className="btn-primary">物件を登録する</button>
+          </div>
+        )}
 
         {/* 物件カードグリッド */}
-        <div className="property-grid">
-          {DUMMY_PROPERTIES.map((property) => (
-            <div key={property.id} className="property-card">
-              {/* 物件画像プレースホルダー */}
-              <div className="property-image">
-                <span className="property-rooms">{property.rooms}</span>
-                {property.tag && <span className="property-tag">{property.tag}</span>}
-              </div>
+        {!loading && !error && properties.length > 0 && (
+          <div className="property-grid">
+            {properties.map((property) => (
+              <div key={property.id} className="property-card">
+                {/* 物件ヘッダー部分（間取り表示） */}
+                <div className="property-image">
+                  <span className="property-rooms">{property.layout}</span>
+                </div>
 
-              {/* 物件情報 */}
-              <div className="property-body">
-                <h3 className="property-name">{property.name}</h3>
-                <p className="property-area">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-                    <circle cx="12" cy="10" r="3" />
-                  </svg>
-                  {property.area}
-                </p>
-                <p className="property-size">{property.size} m²</p>
-                <p className="property-rent">
-                  <span className="rent-amount">{formatRent(property.rent)}</span>
-                  <span className="rent-unit">/ 月</span>
-                </p>
+                {/* 物件情報 */}
+                <div className="property-body">
+                  <h3 className="property-name">{property.name}</h3>
+                  <p className="property-area">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                      <circle cx="12" cy="10" r="3" />
+                    </svg>
+                    {property.area}
+                  </p>
+                  <p className="property-rent">
+                    <span className="rent-amount">{formatRent(property.rent)}</span>
+                    <span className="rent-unit">/ 月</span>
+                  </p>
+
+                  {/* 編集・削除ボタン */}
+                  <div className="card-actions">
+                    <button
+                      onClick={() => handleEditClick(property)}
+                      className="btn-card-edit"
+                    >
+                      編集
+                    </button>
+                    <button
+                      onClick={() => handleDelete(property)}
+                      className="btn-card-delete"
+                    >
+                      削除
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </main>
+
+      {/* 物件登録・編集モーダル */}
+      {showForm && (
+        <PropertyForm
+          initialData={editTarget}
+          onSave={handleSave}
+          onCancel={handleFormCancel}
+        />
+      )}
     </div>
   )
 }
